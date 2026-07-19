@@ -1,0 +1,28 @@
+[project]
+name = "iteration-store"
+version = "0.1.0"
+description = "Project-scoped long-term memory for coding agents."
+authors = [
+    {name = "Kairav Parekh",email = "kairav.parekh@outlook.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+]
+
+
+[tool.poetry]
+packages = [{ include = "iteration_store", from = "src" }]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

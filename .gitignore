@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local stores (should never be committed; the real one lives in ~/.iteration-store)
+.iteration-store/
+*.db
+*.db-wal
+*.db-shm
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
