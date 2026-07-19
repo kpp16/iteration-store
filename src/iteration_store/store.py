@@ -68,7 +68,25 @@ class Store:
         register(project)
         return cls(connect(str(store_path(project))), project)
 
+    @_synchronized
     def close(self) -> None:
+        """Fold the WAL back into the database file, then close.
+
+        Without this the store is only complete as three files. SQLite does not
+        auto-checkpoint until the WAL reaches ~1000 pages, so a young store keeps
+        everything — schema included — in ``store.db-wal`` while ``store.db``
+        stays an empty 4KB stub. Anything that copies, backs up, or opens the
+        ``.db`` alone then sees no tables at all, with no error to explain it.
+
+        TRUNCATE rather than PASSIVE so the WAL is emptied rather than left at
+        full size. Best-effort: a checkpoint blocked by another process must not
+        turn closing into a failure, and losing it costs nothing but tidiness —
+        the data is durable in the WAL either way.
+        """
+        try:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
         self._conn.close()
 
     def __enter__(self) -> "Store":

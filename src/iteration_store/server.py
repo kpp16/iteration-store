@@ -10,7 +10,9 @@ store is decided entirely by how these descriptions read to an agent.
 
 from __future__ import annotations
 
+import atexit
 import os
+import signal
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -44,12 +46,27 @@ _store: Store | None = None
 
 
 def store() -> Store:
-    """Open the project's store once, on first use."""
+    """Open the project's store once, on first use.
+
+    The connection is held for the life of the process rather than reopened per
+    call: this server is long-lived, and WAL means holding it does not block
+    other agents. `close_store` is registered at exit so the WAL is checkpointed
+    back into the database file on the way out.
+    """
     global _store
     if _store is None:
         override = os.environ.get(PROJECT_ENV_VAR)
         _store = Store.open(Path(override) if override else None)
+        atexit.register(close_store)
     return _store
+
+
+def close_store() -> None:
+    """Close the cached store, if one was ever opened. Idempotent."""
+    global _store
+    if _store is not None:
+        _store.close()
+        _store = None
 
 
 @mcp.tool()
@@ -265,8 +282,25 @@ def _is_diff_preamble(line: str) -> bool:
     return line.startswith(("diff --git ", "index ", "--- ", "+++ ", "new file mode "))
 
 
+def install_shutdown_handler() -> None:
+    """Make SIGTERM exit normally, so the store is closed on the way out.
+
+    `atexit` already covers an ordinary exit, including stdin closing under the
+    stdio transport. A host that stops the server with SIGTERM would otherwise
+    bypass it and leave the WAL unmerged, so translate that signal into a normal
+    exit. SIGKILL cannot be caught; the data is still durable in the WAL, it just
+    is not folded back into the database file.
+    """
+
+    def terminate(*_: object) -> None:
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, terminate)
+
+
 def main() -> None:
     """Entry point. Speaks MCP over stdio."""
+    install_shutdown_handler()
     mcp.run(transport="stdio")
 
 

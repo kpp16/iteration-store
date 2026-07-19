@@ -7,6 +7,8 @@ subprocesses and threads rather than simulating contention.
 
 from __future__ import annotations
 
+import os
+import sqlite3
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from iteration_store.projects import store_path
 from iteration_store.schema import BUSY_TIMEOUT_MS
 from iteration_store.store import Store
 
@@ -170,3 +173,122 @@ class TestThreads:
 
         assert store.note_count() == 40
         assert store.count() == 1
+
+
+class TestCheckpointOnClose:
+    """The database file must stand alone once a store is closed.
+
+    SQLite already checkpoints when the *last* connection to a database closes,
+    so a single-connection store needs no help. The case that does is two agents
+    on one project: while another session holds the store open, closing yours
+    leaves the WAL untouched, and ``store.db`` stays a 4KB stub containing no
+    tables at all. Anything that copies or opens the ``.db`` alone — a backup,
+    an external viewer — then silently sees an empty database.
+
+    Every test here keeps a second connection open, because without one SQLite's
+    automatic checkpoint hides whether the explicit one works.
+    """
+
+    def test_file_stands_alone_though_another_store_is_open(
+        self, git_repo: Path, tmp_path: Path
+    ):
+        other = Store.open(git_repo)  # Another agent's session, still running.
+        try:
+            with Store.open(git_repo) as store:
+                store.remember("A durable fact about billing.")
+                store.note("an observation")
+                db_path = Path(store_path(store.project))
+
+            # Copy only the .db, the way a backup or an external viewer sees it.
+            detached = tmp_path / "detached.db"
+            detached.write_bytes(db_path.read_bytes())
+
+            conn = sqlite3.connect(detached)
+            try:
+                assert conn.execute("SELECT COUNT(*) FROM memory").fetchone()[0] == 1
+                assert conn.execute("SELECT COUNT(*) FROM note").fetchone()[0] == 1
+            finally:
+                conn.close()
+        finally:
+            other.close()
+
+    def test_wal_is_emptied_though_another_store_is_open(self, git_repo: Path):
+        other = Store.open(git_repo)
+        try:
+            with Store.open(git_repo) as store:
+                for index in range(50):
+                    store.note(f"note {index}")
+                db_path = Path(store_path(store.project))
+
+            wal = db_path.with_name(db_path.name + "-wal")
+            assert not wal.exists() or wal.stat().st_size == 0
+        finally:
+            other.close()
+
+    def test_the_other_store_still_works_after_a_checkpoint(self, git_repo: Path):
+        # Checkpointing must not disturb the connection that stayed open.
+        other = Store.open(git_repo)
+        try:
+            with Store.open(git_repo) as store:
+                store.remember("written while another connection is open")
+
+            assert other.count() == 1
+            other.note("still writable after the checkpoint")
+            assert other.note_count() == 1
+        finally:
+            other.close()
+
+
+SERVER_WRITER = """
+import os, signal, sys, time
+from iteration_store import server
+
+server.install_shutdown_handler()   # main() does this before serving.
+server.store().remember("written by the server process")
+
+if sys.argv[1] == "sigterm":
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(5)   # Should never be reached; the handler exits.
+"""
+
+
+class TestServerReleasesTheStore:
+    """The MCP server holds one connection for its whole life, so it is the only
+    thing that ever closes it — nothing else calls `close`.
+
+    Each test keeps a second agent's store open across the subprocess's whole
+    life. That is the real deployment (one server per session, several sessions
+    per project) and it is also what makes the assertion meaningful: with only
+    one connection, SQLite checkpoints automatically when the interpreter
+    finalizes it, and the server would look correct however it shut down.
+    """
+
+    @pytest.mark.parametrize("how", ["normal", "sigterm"])
+    def test_database_stands_alone_after_the_server_exits(
+        self, git_repo: Path, tmp_path: Path, how: str
+    ):
+        env = {
+            **os.environ,
+            "ITERATION_STORE_PROJECT": str(git_repo),
+            "ITERATION_STORE_HOME": os.environ["ITERATION_STORE_HOME"],
+        }
+
+        other = Store.open(git_repo)  # Another session, outliving the subprocess.
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", SERVER_WRITER, how],
+                env=env, capture_output=True, text=True, timeout=30,
+            )
+            assert result.returncode == 0, result.stderr
+
+            source = Path(store_path(other.project))
+            db_path = tmp_path / "copied.db"
+            db_path.write_bytes(source.read_bytes())
+        finally:
+            other.close()
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM memory").fetchone()[0] == 1
+        finally:
+            conn.close()
