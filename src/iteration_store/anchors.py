@@ -31,9 +31,18 @@ _SYMBOL_PATTERNS: tuple[str, ...] = (
 
 
 def strip_path_prefix(anchor: str) -> str:
-    """Drop a leading ``path::`` from an anchor, if present."""
-    _, sep, tail = anchor.rpartition("::")
-    return tail if sep else anchor
+    """Drop a leading ``path::`` from an anchor, if present.
+
+    Only strips when the head actually looks like a file path. A namespace-
+    qualified symbol (``Foo::bar``, ``impl Foo::bar``) must survive intact:
+    stripping it would leave the bare name, which ``find_symbol_span`` resolves
+    to the first match anywhere in the file — silently anchoring the memory to
+    the wrong symbol, which never goes suspect because it still resolves.
+    """
+    head, sep, tail = anchor.partition("::")
+    if not sep:
+        return anchor
+    return tail if ("/" in head or "." in head) else anchor
 
 
 def resolve_anchor(source: str, anchor: str) -> tuple[int, int] | None:

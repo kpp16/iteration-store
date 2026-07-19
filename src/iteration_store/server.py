@@ -18,7 +18,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .models import RecallResult
-from .store import Store
+from .store import UNSET, Store
 
 PROJECT_ENV_VAR = "ITERATION_STORE_PROJECT"
 SESSION_ENV_VAR = "ITERATION_STORE_SESSION"
@@ -173,13 +173,19 @@ def revise(
         content: Replacement text. Omit to keep the existing wording.
         deps: Replacement dependency list — a full replacement, not an addition.
             Omit to keep the existing dependencies and simply re-baseline them.
-        review_days: Replacement review interval in days.
+        review_days: Replacement review interval in days. Omit to keep the
+            current cadence. Pass 0 to clear it, so a fact that turned out to be
+            durable stops being flagged for review.
     """
     memory = store().revise(
         memory_id,
-        content=content,
-        deps=deps,
-        review_interval=timedelta(days=review_days) if review_days else None,
+        content=UNSET if content is None else content,
+        deps=UNSET if deps is None else deps,
+        review_interval=(
+            UNSET
+            if review_days is None
+            else timedelta(days=review_days) if review_days > 0 else None
+        ),
     )
     return f"Revised #{memory.id}."
 

@@ -50,6 +50,24 @@ class TestLineSpans:
         assert anchors.resolve_anchor(PYTHON, "L10-L2") is None
 
 
+class TestPathPrefixes:
+    def test_strips_a_leading_file_path(self):
+        assert anchors.strip_path_prefix("services/auth.py::rotate_token") == "rotate_token"
+
+    def test_leaves_a_bare_symbol_alone(self):
+        assert anchors.strip_path_prefix("rotate_token") == "rotate_token"
+
+    def test_keeps_a_namespace_qualified_symbol_intact(self):
+        # Stripping this to "bar" would resolve to the first `bar` anywhere in
+        # the file — anchoring the memory to the wrong symbol while still
+        # resolving, so it would never surface as suspect.
+        assert anchors.strip_path_prefix("Foo::bar") == "Foo::bar"
+        assert anchors.strip_path_prefix("mod::Type::method") == "mod::Type::method"
+
+    def test_strips_only_the_path_from_a_qualified_symbol(self):
+        assert anchors.strip_path_prefix("src/x.cpp::Foo::bar") == "Foo::bar"
+
+
 class TestSymbolSpans:
     def test_finds_function_and_its_body(self):
         span = anchors.resolve_anchor(PYTHON, "alpha")

@@ -22,6 +22,22 @@ from .suspicion import DepState, determine_suspicion
 DepSpec = str | tuple[str, str | None]
 
 
+class _Unset:
+    """Sentinel distinguishing "argument omitted" from an explicit ``None``.
+
+    ``revise`` needs both: omitting ``review_interval`` keeps the existing
+    cadence, while passing ``None`` clears it so the fact never expires. Without
+    the distinction a decaying memory could never become durable — it would have
+    to be deleted and re-added, losing its id and recall history.
+    """
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _Unset()
+
+
 def _synchronized(method):
     """Serialize an operation against other threads sharing this Store."""
 
@@ -154,22 +170,29 @@ class Store:
         self,
         memory_id: int,
         *,
-        content: str | None = None,
-        kind: str | None = None,
-        deps: Sequence[DepSpec] | None = None,
-        review_interval: timedelta | None = None,
+        content: str | _Unset = UNSET,
+        kind: str | None | _Unset = UNSET,
+        deps: Sequence[DepSpec] | None | _Unset = UNSET,
+        review_interval: timedelta | None | _Unset = UNSET,
     ) -> Memory:
-        """Rewrite a memory that turned out to be wrong, and re-baseline it."""
+        """Rewrite a memory that turned out to be wrong, and re-baseline it.
+
+        Every field is omit-to-keep. Passing an explicit ``None`` clears instead:
+        ``review_interval=None`` makes a decaying fact durable, ``deps=None``
+        drops its dependencies.
+        """
         memory = self.get(memory_id)
         now = _utcnow()
 
-        interval = review_interval if review_interval is not None else memory.review_interval
+        interval = memory.review_interval if isinstance(review_interval, _Unset) else review_interval
 
-        if deps is not None:
+        if isinstance(deps, _Unset):
+            records = [self._build_dep(dep.path, dep.anchor) for dep in memory.deps]
+        elif deps is None:
+            records = []
+        else:
             parsed = [_parse_dep_spec(spec) for spec in deps]
             records = [self._build_dep(path, anchor) for path, anchor in parsed]
-        else:
-            records = [self._build_dep(dep.path, dep.anchor) for dep in memory.deps]
 
         self._conn.execute("DELETE FROM memory_dep WHERE memory_id = ?", (memory_id,))
         self._insert_deps(memory_id, records)
@@ -186,8 +209,8 @@ class Store:
              WHERE id = ?
             """,
             (
-                content if content is not None else memory.content,
-                kind if kind is not None else memory.kind,
+                memory.content if isinstance(content, _Unset) else content,
+                memory.kind if isinstance(kind, _Unset) else kind,
                 now.isoformat(),
                 self._head(),
                 strategy.value,

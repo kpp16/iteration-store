@@ -141,6 +141,18 @@ class TestRepair:
         server.revise(memory_id, content="replacement wording about quotas")
         assert "quotas" in server.recall("quotas")
 
+    def test_revise_clears_the_cadence_with_zero_review_days(self):
+        # JSON has no sentinel, so the tool encodes "clear" as 0 and "leave
+        # alone" as an omitted argument.
+        stored = server.remember("a decaying fact", review_days=30)
+        memory_id = int(stored.split("#")[1].rstrip("."))
+
+        server.revise(memory_id, content="reworded")
+        assert server.store().get(memory_id).review_interval is not None
+
+        server.revise(memory_id, review_days=0)
+        assert server.store().get(memory_id).review_interval is None
+
     def test_revise_keeps_the_same_id(self):
         stored = server.remember("a fact")
         memory_id = int(stored.split("#")[1].rstrip("."))

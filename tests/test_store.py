@@ -214,6 +214,30 @@ class TestConfirmAndRevise:
         revised = store.revise(memory.id, deps=["services/billing.py::charge"])
         assert [dep.path for dep in revised.deps] == ["services/billing.py"]
 
+    def test_revise_keeps_the_review_interval_when_omitted(self, store: Store):
+        memory = store.remember("a decaying fact", review_interval=timedelta(days=30))
+        revised = store.revise(memory.id, content="reworded, cadence untouched")
+        assert revised.review_interval == timedelta(days=30)
+
+    def test_revise_clears_the_review_interval_when_passed_none(self, store: Store):
+        # NULL means never. A fact that turns out to be durable has to be able to
+        # stop expiring without being deleted and re-added, which would lose its
+        # id and recall history.
+        memory = store.remember("a decaying fact", review_interval=timedelta(days=30))
+        revised = store.revise(memory.id, review_interval=None)
+
+        assert revised.review_interval is None
+        assert revised.next_review_at is None
+        assert revised.validation_strategy is Strategy.MANUAL
+        assert revised.content == "a decaying fact"
+
+    def test_revise_clears_dependencies_when_passed_none(self, store: Store):
+        memory = store.remember("anchored fact", deps=["services/auth.py::rotate_token"])
+        revised = store.revise(memory.id, deps=None)
+
+        assert revised.deps == ()
+        assert revised.validation_strategy is Strategy.MANUAL
+
     def test_revised_content_is_searchable(self, store: Store):
         memory = store.remember("original wording")
         store.revise(memory.id, content="replacement wording about quotas")
