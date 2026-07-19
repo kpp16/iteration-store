@@ -17,8 +17,32 @@ could get by reading one file is not worth storing.
 
 ## Status
 
-Phase 1: the core library. No MCP server yet (phase 2), and notes are not
-implemented (phase 3).
+Phases 1 and 2: the core library and the MCP server. Notes are not implemented
+(phase 3).
+
+## Use from Claude Code
+
+```bash
+claude mcp add iteration-store -- iteration-store-mcp
+```
+
+The server resolves the project from its working directory (git root, or the
+directory itself). Set `ITERATION_STORE_PROJECT` to override, and
+`ITERATION_STORE_HOME` to relocate the stores from `~/.iteration-store`.
+
+Four tools: `remember`, `recall`, `confirm`, `revise`. A recalled fact carries any
+reason to distrust it, with a diff as evidence:
+
+```
+#1 [gotcha] Rotation reverses the token in place; callers must not cache it.
+    depends on: services/auth.py::rotate_token
+    [!] deps_changed
+        services/auth.py::rotate_token: changed since this was written
+        @@ -1,6 +1,6 @@
+         def rotate_token(t):
+        -    return t[::-1]
+        +    return t[::-1] + '!'
+```
 
 ## Usage
 

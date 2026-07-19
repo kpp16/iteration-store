@@ -405,7 +405,7 @@ The walking skeleton, as a library.
 with a diff after an unrelated-file edit is correctly *not* flagged and a real edit to the
 anchored span *is*, and comes back suspect with an age after its review deadline passes.
 
-### Phase 2 — MCP server
+### Phase 2 — MCP server ✅ implemented
 
 - Wrap the phase-1 API in MCP tools; no new store logic.
 - Tool descriptions are real design work, not boilerplate: they are the entire interface an
