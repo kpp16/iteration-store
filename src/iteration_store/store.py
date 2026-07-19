@@ -6,18 +6,31 @@ its own.
 
 from __future__ import annotations
 
+import functools
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from . import anchors, gitutil
-from .models import Dep, Memory, RecallResult, Strategy
+from .models import Dep, Memory, Note, RecallResult, Strategy
 from .projects import Project, register, resolve_project, store_path
 from .schema import connect
 from .suspicion import DepState, determine_suspicion
 
 DepSpec = str | tuple[str, str | None]
+
+
+def _synchronized(method):
+    """Serialize an operation against other threads sharing this Store."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class Store:
@@ -26,6 +39,12 @@ class Store:
     def __init__(self, conn: sqlite3.Connection, project: Project) -> None:
         self._conn = conn
         self.project = project
+
+        # Cross-process contention is handled by WAL plus busy_timeout. This
+        # guards the other axis: one connection shared across threads, which
+        # SQLite does not serialize for us. Held only for the duration of a
+        # single operation, so it never blocks another process.
+        self._lock = threading.RLock()
 
     @classmethod
     def open(cls, cwd: Path | str | None = None) -> "Store":
@@ -44,6 +63,7 @@ class Store:
 
     # ------------------------------------------------------------------ write
 
+    @_synchronized
     def remember(
         self,
         content: str,
@@ -98,6 +118,7 @@ class Store:
 
         return self.get(memory_id)
 
+    @_synchronized
     def confirm(self, memory_id: int) -> Memory:
         """Assert a suspect memory is still true, and re-baseline it.
 
@@ -128,6 +149,7 @@ class Store:
         self._conn.commit()
         return self.get(memory_id)
 
+    @_synchronized
     def revise(
         self,
         memory_id: int,
@@ -177,8 +199,60 @@ class Store:
         self._conn.commit()
         return self.get(memory_id)
 
+    @_synchronized
+    def note(
+        self,
+        body: str,
+        *,
+        author: str | None = None,
+        session_id: str | None = None,
+        paths: Sequence[str] = (),
+    ) -> Note:
+        """Record a free-form observation, dead end, or piece of reasoning.
+
+        No curation bar and no validation — the counterweight to `remember`, which
+        rejects anything a single file read would answer. Notes are write-only for
+        now; nothing reads them back yet.
+
+        Provenance is captured because it cannot be reconstructed later. Which
+        agent wrote this, in what session, against which commit — every plausible
+        future retrieval strategy needs some of it, and none of it survives being
+        deferred.
+        """
+        if not body.strip():
+            raise ValueError("body must not be empty")
+
+        now = _utcnow()
+        cursor = self._conn.execute(
+            """
+            INSERT INTO note (body, author, session_id, created_at, cwd_commit)
+                 VALUES (?, ?, ?, ?, ?)
+            """,
+            (body, author, session_id, now.isoformat(), self._head()),
+        )
+        note_id = int(cursor.lastrowid)
+
+        # Advisory only: unlike a memory's dependencies, these are never resolved
+        # or hashed, so a path that does not exist is recorded as written.
+        self._conn.executemany(
+            "INSERT INTO note_path (note_id, path) VALUES (?, ?)",
+            [(note_id, _relative(path, self.project.root)) for path in paths],
+        )
+        self._conn.commit()
+
+        return Note(
+            id=note_id,
+            body=body,
+            author=author,
+            session_id=session_id,
+            created_at=now,
+            cwd_commit=self._head(),
+            paths=tuple(_relative(path, self.project.root) for path in paths),
+        )
+
     # ------------------------------------------------------------------- read
 
+    @_synchronized
     def recall(self, query: str | None = None, *, limit: int = 10) -> list[RecallResult]:
         """Retrieve memories, each carrying any reason to distrust it.
 
@@ -206,14 +280,21 @@ class Store:
         self._mark_recalled([result.memory.id for result in results], now)
         return results
 
+    @_synchronized
     def get(self, memory_id: int) -> Memory:
         row = self._conn.execute("SELECT * FROM memory WHERE id = ?", (memory_id,)).fetchone()
         if row is None:
             raise KeyError(f"no memory with id {memory_id}")
         return self._hydrate(row)
 
+    @_synchronized
     def count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) FROM memory").fetchone()[0])
+
+    @_synchronized
+    def note_count(self) -> int:
+        """Notes have no read path; this exists for tests and diagnostics."""
+        return int(self._conn.execute("SELECT COUNT(*) FROM note").fetchone()[0])
 
     # --------------------------------------------------------------- internals
 

@@ -43,8 +43,13 @@ def tools() -> dict:
 
 
 class TestRegistration:
-    def test_exposes_the_four_operations(self):
-        assert set(tools()) == {"remember", "recall", "confirm", "revise"}
+    def test_exposes_the_expected_operations(self):
+        assert set(tools()) == {"remember", "recall", "confirm", "revise", "note"}
+
+    def test_notes_have_no_read_tool(self):
+        # Notes are write-only until retrieval is designed; a read tool appearing
+        # here would mean that decision got reversed without the design changing.
+        assert not any(name.startswith("recall_note") for name in tools())
 
     def test_descriptions_are_substantial(self):
         # These descriptions are the only governance on what gets stored, so a

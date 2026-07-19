@@ -53,6 +53,23 @@ class Memory:
 
 
 @dataclass(frozen=True)
+class Note:
+    """A free-form observation. No curation bar, and no read path yet.
+
+    ``paths`` is advisory context, never validated against disk — notes do not
+    participate in the staleness machinery that governs memories.
+    """
+
+    id: int
+    body: str
+    author: str | None
+    session_id: str | None
+    created_at: datetime
+    cwd_commit: str | None
+    paths: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class RecallResult:
     memory: Memory
     score: float

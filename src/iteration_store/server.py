@@ -11,6 +11,7 @@ store is decided entirely by how these descriptions read to an agent.
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
@@ -20,6 +21,11 @@ from .models import RecallResult
 from .store import Store
 
 PROJECT_ENV_VAR = "ITERATION_STORE_PROJECT"
+SESSION_ENV_VAR = "ITERATION_STORE_SESSION"
+
+# One server process per agent session, so a per-process id is a faithful stand-in
+# for "the session that wrote this" — the host can override if it knows better.
+SESSION_ID = os.environ.get(SESSION_ENV_VAR) or uuid.uuid4().hex[:12]
 
 # Diff evidence is already capped in gitutil; cap again per result so a recall
 # returning several suspect memories cannot crowd out the memories themselves.
@@ -176,6 +182,35 @@ def revise(
         review_interval=timedelta(days=review_days) if review_days else None,
     )
     return f"Revised #{memory.id}."
+
+
+@mcp.tool()
+def note(body: str, author: str | None = None, paths: list[str] | None = None) -> str:
+    """Jot down an observation, dead end, or piece of reasoning. No bar to clear.
+
+    This is the low-bar counterpart to `remember`. Where a memory must be a durable
+    fact that was expensive to establish, a note can be anything you might want a
+    future session to have seen. Write freely — that is what it is for.
+
+    Especially worth noting: approaches that did NOT work and why, surprises,
+    half-formed observations, reasoning behind a choice you are about to make,
+    context that would be tedious to reconstruct. A dead end recorded here can save
+    a future session an hour, and it fits nowhere else — it states no durable fact,
+    so it is not a memory.
+
+    Notes are not searchable yet. Write them anyway: they are being collected now so
+    that retrieval can be designed against real notes rather than a guess about
+    them. Provenance (who, which session, which commit) is recorded automatically.
+
+    Args:
+        body: The observation, in whatever form is useful.
+        author: Who is writing — your agent or subagent name, if you have one.
+        paths: Files in play right now, if any. Recorded as context only; unlike a
+            memory's dependencies these are never validated, so they cost nothing
+            to include and may help find this note later.
+    """
+    stored = store().note(body, author=author, session_id=SESSION_ID, paths=paths or ())
+    return f"Noted (#{stored.id})."
 
 
 def _format(result: RecallResult) -> str:

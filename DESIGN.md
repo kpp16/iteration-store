@@ -415,7 +415,7 @@ anchored span *is*, and comes back suspect with an age after its review deadline
 *Done when:* Claude Code can remember and recall against a scratch project over MCP, and a
 suspect result visibly prompts a confirm or revise.
 
-### Phase 3 — notes
+### Phase 3 — notes ✅ implemented
 
 Small, and only useful once MCP exists, since agents are the only writers.
 
@@ -425,12 +425,41 @@ Small, and only useful once MCP exists, since agents are the only writers.
 *Done when:* agents and subagents can log notes that land with correct author, session, and
 commit provenance.
 
+**Deviation from the sketch:** paths are a `note_path` child table rather than a column.
+The deferred retrieval design leans on path overlap as its strongest signal, and a child
+table makes that an indexed join instead of a migration. Same argument as recording
+provenance early — cheap now, awkward later.
+
+### Concurrency ✅ implemented (pulled forward from phase 4)
+
+Multiple agents means multiple processes against one file, so this could not wait for a
+later hardening pass.
+
+- **WAL** — readers proceed while a writer holds the lock. Persisted in the database
+  header, so it is set once and inherited by every later connection.
+- **`busy_timeout` (5s)** — the critical one. Without it a competing writer fails instantly
+  with "database is locked" rather than waiting out a write that takes microseconds.
+  Verified by mutation: at zero, every multi-process test fails.
+- **`synchronous = NORMAL`** — safe under WAL (a crash can lose the last transaction but
+  cannot corrupt the file) and avoids an fsync per write.
+- **Migrations run inside `BEGIN EXCLUSIVE`**, re-reading the version *inside* the lock.
+  Found by test: two agents starting simultaneously both saw `user_version == 0` and both
+  tried to create the schema, and the loser failed with "table memory already exists". This
+  is why migrations are tuples of statements — `executescript` issues an implicit COMMIT
+  that would dissolve the transaction, and splitting on `;` is impossible with trigger
+  bodies.
+- **A per-Store lock** for the second axis: one connection shared across threads, which
+  SQLite does not serialize. Cheap insurance for a threaded host; the cross-process path
+  does not depend on it.
+
+Known limit: WAL requires a local filesystem. A store on NFS or a network share will
+misbehave, and nothing detects that.
+
 ### Phase 4 — hardening
 
 Driven by whatever the first three phases actually expose.
 
 - tree-sitter anchors if the regex finder proves too lossy.
-- Concurrency: multiple agents against one store, SQLite locking, WAL.
 - Recall performance and result-shaping at realistic corpus sizes.
 - Tuning defaults for `review_interval` per kind.
 
