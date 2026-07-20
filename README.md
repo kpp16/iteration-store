@@ -10,7 +10,7 @@ The design and its reasoning live in [DESIGN.md](DESIGN.md).
 
 ## What it optimizes for
 
-**Avoiding re-derivation**, not reducing token usage in general. A query is only
+**Avoiding re-derivation**, not just reducing token usage in general. A query is only
 worth making when the alternative was expensive rediscovery — reading several
 files to re-establish something that was already worked out last week. A fact you
 could get by reading one file is not worth storing.
